@@ -107,8 +107,8 @@ flowchart LR
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/MohamedAlksas/Multi-tier-web-application.git
-cd Multi-tier-web-application/terraform
+git clone https://github.com/MohamedAlksas/Manara-SAA-Project1-Scalable-Web-App.git
+cd Manara-SAA-Project1-Scalable-Web-App/terraform
 ```
 
 ### 2. Configure Environment Variables
