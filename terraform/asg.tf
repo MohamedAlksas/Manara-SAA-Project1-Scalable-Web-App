@@ -125,3 +125,23 @@ resource "aws_autoscaling_policy" "cpu_target_tracking" {
     target_value = 60.0
   }
 }
+
+# Step Scaling Policy (Scale Out for rapid spike response)
+resource "aws_autoscaling_policy" "step_scale_out" {
+  name                   = "manara-asg-step-scale-out"
+  autoscaling_group_name = aws_autoscaling_group.web.name
+  policy_type            = "StepScaling"
+  adjustment_type        = "ChangeInCapacity"
+
+  step_adjustment {
+    scaling_adjustment          = 1
+    metric_interval_lower_bound = 0
+    metric_interval_upper_bound = 25
+  }
+
+  step_adjustment {
+    scaling_adjustment          = 2
+    metric_interval_lower_bound = 25
+  }
+}
+

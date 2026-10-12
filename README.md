@@ -24,15 +24,17 @@ Designed in strict accordance with the **AWS Well-Architected Framework**, this 
 
 ![Solution Architecture Diagram](./architecture_diagram.png)
 
+> 💡 **Tip:** The vector source file is available at [`architecture_diagram.drawio`](./architecture_diagram.drawio). You can open and edit it directly in [Draw.io / diagrams.net](https://app.diagrams.net/).
+
 ### End-to-End Traffic & Data Flow
-1. **Edge & DNS:** Users query **Amazon Route 53**, which resolves the domain via an **Alias A Record** pointing to **Amazon CloudFront**.
-2. **Security Edge:** Inbound traffic passes through **AWS WAF (Web Application Firewall)**, inspecting requests against the **OWASP Top 10** managed rule set and rate-limiting potential DDoS attacks.
-3. **Public Ingress:** Legitimate traffic enters the **VPC (10.0.0.0/16)** through an **Internet Gateway (IGW)** to the internet-facing **Application Load Balancer (ALB)** distributed across two public subnets.
-4. **Private Compute:** The ALB forwards HTTP requests across an **Auto Scaling Group (ASG)** of EC2 instances running inside **Private Application Subnets**. Instances are inaccessible from the public internet.
-5. **Private Data Tier:** App servers communicate with an **Amazon RDS MySQL Multi-AZ** database cluster. The primary database writes synchronously to a standby replica in the second Availability Zone.
-6. **Outbound Internet:** Private EC2 instances access external security patches and OS updates via dedicated **NAT Gateways** deployed in each public subnet.
-7. **Bastion-Free Management:** Engineers securely administer EC2 instances using **AWS Systems Manager (SSM) Session Manager**, completely eliminating the need for exposed SSH ports or Bastion Jump Hosts.
-8. **Observability:** **Amazon CloudWatch** monitors CPU utilization and ALB target error rates, triggering automated **Amazon SNS** email alerts upon threshold breaches.
+1. **Edge & DNS:** Users query **Amazon Route 53**, which resolves the domain via an **Alias A Record** pointing to **Amazon CloudFront** and the **Application Load Balancer (ALB)**, while actively monitoring backend health via **Route 53 Health Checks**.
+2. **Global CDN Caching:** Static assets are cached at **Amazon CloudFront** edge locations worldwide, reducing latency and terminating TLS close to clients. Dynamic requests are routed back to the origin.
+3. **Public Ingress & Perimeter Security:** Traffic enters the **VPC (10.0.0.0/16)** via an **Internet Gateway (IGW)**, passes through the **Public Subnet NACL**, and is inspected by **AWS WAFv2** (filtering **OWASP Top 10** threats and rate-limiting) directly attached to the **Application Load Balancer (ALB)**.
+4. **Private Compute Tier:** The ALB forwards HTTP requests across an **Auto Scaling Group (ASG)** of EC2 instances running inside **Private Application Subnets**. Compute instances are protected by stateless subnet NACLs and stateful Security Groups with zero direct public ingress.
+5. **Private Data Tier:** App servers communicate securely with an **Amazon RDS MySQL Multi-AZ** database cluster located in dedicated, isolated **Private Database Subnets**. The primary master writes synchronously to a standby replica in the second Availability Zone.
+6. **Outbound Internet Access:** Private EC2 instances access security patches and OS package updates via dedicated, high-availability **NAT Gateways** deployed across both Availability Zones.
+7. **Bastion-Free Management:** Engineers securely administer EC2 instances using **AWS Systems Manager (SSM) Session Manager**, completely eliminating the need for exposed SSH ports (Port 22) or Bastion Jump Hosts.
+8. **Observability & Dashboards:** An operational **Amazon CloudWatch Dashboard** visualizes real-time CPU utilization, request volume, error codes, and latency, while **CloudWatch Alarms** trigger automated **Amazon SNS** email notifications.
 
 ---
 
@@ -40,15 +42,15 @@ Designed in strict accordance with the **AWS Well-Architected Framework**, this 
 
 | Service | Architectural Role & Implementation Details |
 | :--- | :--- |
-| **Amazon VPC** | Custom `10.0.0.0/16` network divided into **6 subnets across 2 AZs** (2 Public, 2 Private App, 2 Private DB) for network segmentation. |
+| **Amazon VPC** | Custom `10.0.0.0/16` network divided into **6 subnets across 2 AZs** (2 Public, 2 Private App, 2 Private DB) with custom **NACLs** providing subnet-level defense-in-depth. |
 | **NAT Gateways** | **Dual NAT Gateways** deployed across both AZs (`us-east-1a` and `us-east-1b`) ensuring outbound high availability even if an AZ suffers a blackout. |
-| **Application Load Balancer** | Layer 7 routing with active HTTP health checks (`/`), path routing, and target group **deregistration delay (connection draining)** set to 30s. |
-| **Auto Scaling Group (ASG)** | Spans both private subnets with a Launch Template. Uses a **Target Tracking Policy maintaining 60% average CPU utilization** (Min: 2, Desired: 2, Max: 4). |
+| **ALB + WAF** | Layer 7 routing with custom path-based rules (`/app/*`, `/index.html`) & fixed-response health checks (`/healthz`), active HTTP health checks (`/`), connection draining (30s), protected by an **AWS WAFv2 Web ACL** enforcing **OWASP Top 10** managed rules and rate limiting. |
+| **EC2 + ASG** | Spans both private subnets with a Launch Template. Combines a **Target Tracking Policy (60% avg CPU)** with a **Step Scaling Policy** for rapid spike response (Min: 2, Desired: 2, Max: 4). |
 | **Amazon RDS (Multi-AZ)** | Managed MySQL 8.0 with **Synchronous Multi-AZ Replication** providing sub-60s automated failover with zero data loss. Storage encrypted with AWS KMS. |
 | **Amazon CloudFront** | Global Content Delivery Network (CDN) caching static assets, offloading dynamic hits from the ALB, and enforcing HTTPS. |
-| **AWS WAFv2** | Web ACL attached to ALB/CloudFront blocking SQL injection (SQLi), Cross-Site Scripting (XSS), and limiting aggressive bots. |
+| **Route 53** | Public Hosted Zone with an **Alias A Record pointing to the ALB**, CloudFront distribution routing, and active **Route 53 Health Checks**. |
 | **AWS Systems Manager** | Replaces risky SSH keys with IAM-authenticated **Session Manager**, logging all administrative sessions to AWS CloudTrail. |
-| **CloudWatch + SNS** | Real-time metric alarms for high CPU (>75%) and ALB 5XX errors triggering automated email notifications. |
+| **CloudWatch + SNS** | Operational **CloudWatch Dashboard**, real-time metric alarms for high CPU (>75%) and ALB 5XX errors triggering automated **Amazon SNS** email notifications. |
 
 ---
 
@@ -71,6 +73,16 @@ flowchart LR
 | **`manara-app-sg`** | `TCP 80` **strictly from** `manara-alb-sg` | `All Traffic` to `0.0.0.0/0` (via NAT) | Web tier instances; direct internet access is blocked. |
 | **`manara-db-sg`** | `TCP 3306` **strictly from** `manara-app-sg` | `None` | Database tier; completely isolated from the web. |
 
+### Network Access Control List (NACL) Matrix
+
+Stateless subnet-boundary filtering (`nacls.tf`) providing true defense-in-depth:
+
+| Subnet Tier | Inbound (Ingress) Rules | Outbound (Egress) Rules |
+| :--- | :--- | :--- |
+| **Public Subnets** | • `100: TCP 80` from `0.0.0.0/0`<br>• `110: TCP 443` from `0.0.0.0/0`<br>• `120: Ephemeral (1024-65535)` from `0.0.0.0/0` | • `100: All Traffic` to `0.0.0.0/0` |
+| **Private App Subnets** | • `100: TCP 80` from VPC CIDR (`10.0.0.0/16`)<br>• `110: Ephemeral (1024-65535)` from `0.0.0.0/0` | • `100: TCP 80/443` to `0.0.0.0/0` (NAT)<br>• `120: TCP 3306` to VPC CIDR (RDS)<br>• `130: Ephemeral` to VPC CIDR (ALB) |
+| **Private DB Subnets** | • `100: TCP 3306` from VPC CIDR (`10.0.0.0/16`) | • `100: Ephemeral (1024-65535)` to VPC CIDR |
+
 ---
 
 ## 📂 Repository File Structure
@@ -78,6 +90,7 @@ flowchart LR
 ```text
 .
 ├── architecture_diagram.png          # High-resolution Solution Architecture Diagram
+├── architecture_diagram.drawio       # Fully editable Draw.io (diagrams.net) source file
 ├── README.md                          # Comprehensive project documentation
 └── terraform/
     ├── provider.tf                    # AWS provider definition and default tags
@@ -85,6 +98,7 @@ flowchart LR
     ├── terraform.tfvars.example       # Sample environment configuration values
     ├── vpc.tf                         # VPC, Internet Gateway, Elastic IPs, and Route Tables
     ├── subnets.tf                     # 6 Subnets across 2 AZs and Route Table Associations
+    ├── nacls.tf                       # Stateless Network ACLs for Public, App, and DB tiers
     ├── security_groups.tf             # Chained security groups enforcing least-privilege
     ├── alb.tf                         # Application Load Balancer, Target Group, and Listeners
     ├── asg.tf                         # Launch Template (Amazon Linux 2023) and Auto Scaling
@@ -93,7 +107,7 @@ flowchart LR
     ├── cloudfront.tf                  # CloudFront CDN distribution and caching behaviors
     ├── route53.tf                     # Route 53 Hosted Zone, Alias A record, and Health Check
     ├── waf.tf                         # AWS WAFv2 Web ACL with OWASP Top 10 rules
-    ├── cloudwatch.tf                  # Metric alarms (CPU / 5XX) and SNS notification topic
+    ├── cloudwatch.tf                  # CloudWatch Dashboard, metric alarms, and SNS topic
     └── outputs.tf                     # Exported endpoints, DNS names, and ARNs
 ```
 
@@ -173,11 +187,14 @@ terraform destroy -auto-approve
 
 ## 🎓 Deliverables Compliance Checklist (Manara SAA-C03)
 
-- [x] **Solution Architecture Diagram:** Provided in visual PNG format created with Diagrams as Code (`architecture_diagram.png`).
+- [x] **Solution Architecture Diagram:** High-resolution diagram (`architecture_diagram.png`) with editable vector source (`architecture_diagram.drawio`).
 - [x] **Public GitHub Repository:** Fully documented code repository with modular Terraform configuration.
-- [x] **VPC Architecture:** Multi-AZ public and private subnets with Dual NAT Gateways.
-- [x] **High Availability Compute:** ALB + EC2 Auto Scaling Group with Target Tracking policy.
-- [x] **Multi-AZ Database:** Fully managed Amazon RDS MySQL with automated failover.
-- [x] **Edge Delivery & Security:** CloudFront CDN caching, Route 53 Alias record, and AWS WAF OWASP rules.
-- [x] **Bastion-Free Access:** AWS Systems Manager Session Manager IAM integration.
-- [x] **Observability:** CloudWatch Alarms integrated with Amazon SNS alerts.
+- [x] **VPC Architecture:** Multi-AZ public & private subnets across 2 AZs with Dual NAT Gateways.
+- [x] **Stateless Network ACLs (NACLs):** Custom NACLs for Public, Private Application, and Database tiers.
+- [x] **High Availability Compute Tier:** ALB + EC2 Auto Scaling Group with Target Tracking and Step Scaling policies.
+- [x] **ALB Layer 7 Routing & Rules:** Custom path routing (`/app/*`), health check fixed responses (`/healthz`), and target health checks.
+- [x] **Multi-AZ Database Tier:** Amazon RDS MySQL with KMS encryption and automated failover.
+- [x] **Edge Delivery & Security:** CloudFront CDN caching, Route 53 Alias record to ALB, and AWS WAF OWASP rules.
+- [x] **Bastion-Free Access:** AWS Systems Manager (SSM) Session Manager IAM integration.
+- [x] **Observability:** Operational CloudWatch Dashboard, CloudWatch Alarms, and Amazon SNS alert topics.
+

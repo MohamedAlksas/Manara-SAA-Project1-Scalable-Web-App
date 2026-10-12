@@ -21,11 +21,11 @@ resource "aws_security_group" "alb" {
   }
 
   egress {
-    description     = "Allow outbound to App Servers on Port 80"
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    security_groups = [aws_security_group.app.id]
+    description = "Allow outbound traffic to backend target group instances"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   tags = {
@@ -74,13 +74,7 @@ resource "aws_security_group" "db" {
     security_groups = [aws_security_group.app.id]
   }
 
-  egress {
-    description = "No outbound access required"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  # Outbound: None (Database tier has no outbound requirements, enforcing least-privilege)
 
   tags = {
     Name = "manara-db-security-group"

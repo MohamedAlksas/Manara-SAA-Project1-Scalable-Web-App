@@ -50,3 +50,43 @@ resource "aws_lb_listener" "http" {
     target_group_arn = aws_lb_target_group.web.arn
   }
 }
+
+# Layer 7 Listener Rule: Application Path-Based Routing (/app/*, /index.html)
+resource "aws_lb_listener_rule" "app_routing" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 10
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.web.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/index.html", "/app/*"]
+    }
+  }
+}
+
+# Layer 7 Listener Rule: Dedicated Health Check endpoint (/healthz) returning 200 OK
+resource "aws_lb_listener_rule" "health_check" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 20
+
+  action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "ALB Layer 7 Health Check OK"
+      status_code  = "200"
+    }
+  }
+
+  condition {
+    path_pattern {
+      values = ["/healthz", "/ping"]
+    }
+  }
+}
+
