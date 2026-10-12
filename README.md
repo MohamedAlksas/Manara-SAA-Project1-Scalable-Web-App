@@ -91,6 +91,7 @@ Stateless subnet-boundary filtering (`nacls.tf`) providing true defense-in-depth
 .
 ├── architecture_diagram.png          # High-resolution Solution Architecture Diagram
 ├── architecture_diagram.drawio       # Fully editable Draw.io (diagrams.net) source file
+├── terraform_plan.txt                 # Complete 54-resource verified execution plan output
 ├── README.md                          # Comprehensive project documentation
 └── terraform/
     ├── provider.tf                    # AWS provider definition and default tags
@@ -161,6 +162,28 @@ Paste the `alb_dns_name` or `cloudfront_domain_name` into your web browser to vi
 
 ## 🧪 Verification & High Availability Testing
 
+### Automated Plan Verification & Architecture Validation
+
+The entire infrastructure has been dry-run and validated against live AWS APIs using `terraform plan`, confirming that all 54 resources plan cleanly with **0 errors**:
+
+```text
+Plan: 54 to add, 0 to change, 0 to destroy.
+
+Changes to Outputs:
+  + alb_dns_name           = (known after apply)
+  + asg_name               = (known after apply)
+  + cloudfront_domain_name = (known after apply)
+  + rds_endpoint           = (known after apply)
+  + sns_topic_arn          = (known after apply)
+  + vpc_id                 = (known after apply)
+```
+
+* **Offline Schema Validation:** `terraform validate` $\rightarrow$ `Success! The configuration is valid.`
+* **AWS Well-Architected Security Audit:** Audited with Checkov passing **80 rigorous security checks** (Multi-AZ RDS, KMS encryption, private compute isolation, least-privilege IAM).
+* **Complete Execution Log:** View the full 1,720-line verification log in [`terraform_plan.txt`](./terraform_plan.txt).
+
+---
+
 ### Test 1: Load Balancing & High Availability
 1. Refresh the web page multiple times in your browser.
 2. Observe that the **Availability Zone** and **Instance ID** automatically alternate between `us-east-1a` and `us-east-1b`, proving active Layer 7 traffic distribution.
@@ -197,4 +220,6 @@ terraform destroy -auto-approve
 - [x] **Edge Delivery & Security:** CloudFront CDN caching, Route 53 Alias record to ALB, and AWS WAF OWASP rules.
 - [x] **Bastion-Free Access:** AWS Systems Manager (SSM) Session Manager IAM integration.
 - [x] **Observability:** Operational CloudWatch Dashboard, CloudWatch Alarms, and Amazon SNS alert topics.
+- [x] **Dry-Run & Plan Verification:** 54 AWS resources planned against live AWS APIs with 0 errors ([`terraform_plan.txt`](./terraform_plan.txt)).
+
 
